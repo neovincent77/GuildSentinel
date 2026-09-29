@@ -693,22 +693,27 @@ async def on_ready():
 async def on_message(message):
     if message.author == bot.user:
         return
-    
+
     # Process commands first
     await bot.process_commands(message)
-    
+
     if not (has_link(message.content) and require_links):
-        return  
+        return
 
     urls = re.findall(REGEX, message.content)
     if not urls:
         return
 
     detected_companies = set()
-    sanitized_map = {}  
+    sanitized_map = {}
 
     for url in urls:
+        print("FOUND URL:", url)
+
         result = clean_url(url)
+
+        print("CLEAN RESULT:", result)
+
         if result["removed_trackers"]:
             detected_companies.update(result["removed_trackers"].keys())
             sanitized_map[url] = result["clean_url"]
@@ -717,21 +722,25 @@ async def on_message(message):
         try:
             reply = await message.reply(">>>")
             await message.delete()
+
             sanitized_message = message.content
+
             for original, cleaned in sanitized_map.items():
                 sanitized_message = sanitized_message.replace(original, cleaned)
 
             # Use mention_reply_author setting
             author_mention = f"{message.author.mention} " if mention_reply_author else ""
+
             notice = (
                 f"{author_mention}Your message has been reposted without trackers from "
                 f"{format_companies(detected_companies)}:"
             )
 
             await reply.edit(content=f"{notice}\n{sanitized_message}")
-        
+
         except discord.Forbidden:
             print("Bot lacks permission to delete messages.")
+
         except Exception as e:
             print(f"Error handling message: {e}")
 
