@@ -396,6 +396,7 @@ except re.error as e:
 def has_link(message: str) -> bool:
     return bool(REGEX.search(message))
 
+
 TRACKER_PREFIXES = {
     "utm_": "Google",
     "gad_": "Google",
@@ -424,21 +425,155 @@ def get_tracker_owner(param_name: str):
 
     return None
 
+
+# ---------------------------------------------------------------
+# Meta / Facebook / Instagram aggressive cleaning
+# ---------------------------------------------------------------
+
+META_HOSTS = {
+    "facebook.com",
+    "www.facebook.com",
+    "m.facebook.com",
+    "mobile.facebook.com",
+    "mbasic.facebook.com",
+    "fb.com",
+    "www.fb.com",
+    "instagram.com",
+    "www.instagram.com",
+    "threads.net",
+    "www.threads.net",
+}
+
+
+def is_meta_host(hostname: str) -> bool:
+    hostname = hostname.lower()
+
+    return (
+        hostname in META_HOSTS
+        or hostname.endswith(".facebook.com")
+        or hostname.endswith(".instagram.com")
+        or hostname.endswith(".threads.net")
+    )
+
+
+def get_meta_param_owner(parsed, key: str):
+    """
+    Aggressively remove unnecessary query parameters from Meta content URLs.
+
+    Meta frequently changes tracking parameter names, so for URLs where
+    the content ID is already contained in the path, query parameters are
+    removed by default.
+
+    Older Facebook formats preserve parameters needed to locate content.
+    """
+
+    hostname = (parsed.hostname or "").lower()
+    path = parsed.path.lower()
+    key = key.lower()
+
+    if not is_meta_host(hostname):
+        return None
+
+    # Instagram
+    if "instagram.com" in hostname:
+        if path.startswith(("/reel/", "/reels/", "/p/", "/tv/")):
+
+            # Can select a particular picture in a carousel
+            if key == "img_index":
+                return None
+
+            return "Meta"
+
+    # Threads
+    if "threads.net" in hostname:
+        if "/post/" in path:
+            return "Meta"
+
+    # Facebook
+    if "facebook.com" in hostname or hostname in {"fb.com", "www.fb.com"}:
+
+        # Modern Facebook URLs with content ID in the path
+        if (
+            path.startswith(("/reel/", "/share/"))
+            or "/posts/" in path
+            or "/videos/" in path
+        ):
+            return "Meta"
+
+        # Facebook Watch requires v=
+        if path in {"/watch", "/watch/"}:
+            if key == "v":
+                return None
+
+            return "Meta"
+
+        # Older story URLs
+        if path.endswith("/story.php") or path == "/story.php":
+            if key in {"story_fbid", "id"}:
+                return None
+
+            return "Meta"
+
+        # Older permalink URLs
+        if path.endswith("/permalink.php") or path == "/permalink.php":
+            if key in {"story_fbid", "id"}:
+                return None
+
+            return "Meta"
+
+        # Facebook photo URLs
+        if path.endswith("/photo.php") or path == "/photo.php":
+            if key in {"fbid", "id", "set"}:
+                return None
+
+            return "Meta"
+
+        # Facebook profile URLs
+        if path.endswith("/profile.php") or path == "/profile.php":
+            if key == "id":
+                return None
+
+            return "Meta"
+
+    return None
+
+
 def has_trackers(url):
     parsed = urlparse(url)
+    hostname = (parsed.hostname or "").lower()
 
     for key, _ in parse_qsl(parsed.query, keep_blank_values=True):
+
+        # Meta-specific aggressive rules
+        if get_meta_param_owner(parsed, key):
+            return True
+
+        # Normal tracker database
         if get_tracker_owner(key):
             return True
 
+        # YouTube share tracking
+        if hostname in {
+            "youtube.com",
+            "www.youtube.com",
+            "m.youtube.com",
+            "youtu.be"
+        }:
+            if key.lower() in {"si", "is"}:
+                return True
+
     return False
+
 
 def build_param_index(tracker_map):
     index = {}
+
     for company, params in tracker_map.items():
         for param in params:
             index[param.lower()] = company
+
     return index
+
 
 def clean_url(url):
     parsed = urlparse(url)
@@ -448,10 +583,25 @@ def clean_url(url):
     hostname = (parsed.hostname or "").lower()
 
     for key, value in parse_qsl(parsed.query, keep_blank_values=True):
-        owner = get_tracker_owner(key)
+        owner = None
+
+        # Meta-specific aggressive cleaning
+        meta_owner = get_meta_param_owner(parsed, key)
+
+        if meta_owner:
+            owner = meta_owner
+
+        # Normal tracker database
+        if not owner:
+            owner = get_tracker_owner(key)
 
         # YouTube share tracking
-        if hostname in {"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be"}:
+        if hostname in {
+            "youtube.com",
+            "www.youtube.com",
+            "m.youtube.com",
+            "youtu.be"
+        }:
             if key.lower() in {"si", "is"}:
                 owner = "YouTube"
 
@@ -479,6 +629,7 @@ def clean_url(url):
         "removed_trackers": removed,
         "message": message
     }
+
 
 def format_companies(companies):
     """Return a nicely formatted string with commas and 'and' before the last item."""
