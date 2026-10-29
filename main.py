@@ -677,6 +677,11 @@ def save_trackers():
 
 intents = discord.Intents.default()
 intents.message_content = True
+intents.members = True
+intents.moderation = True
+
+# Replace this with the ID of the private #member-log channel.
+MEMBER_LOG_CHANNEL_ID = 1565398175831826462
 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
@@ -743,6 +748,86 @@ async def on_message(message):
 
         except Exception as e:
             print(f"Error handling message: {e}")
+
+#--------------------------------------------------------------------
+# Staff-only Membership Logging
+#--------------------------------------------------------------------
+
+async def send_member_log(guild, embed):
+    """Send a membership event to the private staff channel."""
+    if MEMBER_LOG_CHANNEL_ID == 123456789012345678:
+        print("Member log is not configured: set MEMBER_LOG_CHANNEL_ID.")
+        return
+
+    channel = guild.get_channel(MEMBER_LOG_CHANNEL_ID)
+    if channel is None:
+        try:
+            channel = await guild.fetch_channel(MEMBER_LOG_CHANNEL_ID)
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException) as error:
+            print(f"Unable to find membership log channel: {error}")
+            return
+
+    try:
+        await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+    except discord.HTTPException as error:
+        print(f"Could not write membership log: {error}")
+
+
+@bot.event
+async def on_member_join(member):
+    embed = discord.Embed(
+        title="Member Joined",
+        color=discord.Color.green(),
+        timestamp=discord.utils.utcnow(),
+    )
+    embed.add_field(name="Account", value=f"{member.mention}\n{member}", inline=False)
+    embed.add_field(name="Discord ID", value=f"`{member.id}`", inline=False)
+    embed.add_field(name="Account Created", value=discord.utils.format_dt(member.created_at, "F"), inline=False)
+    embed.add_field(name="Rules Screening", value="Pending" if member.pending else "Not pending", inline=False)
+    embed.set_thumbnail(url=member.display_avatar.url)
+    await send_member_log(member.guild, embed)
+
+
+@bot.event
+async def on_raw_member_remove(payload):
+    # Raw removal works even if the member was not cached (e.g. during screening).
+    guild = bot.get_guild(payload.guild_id)
+    if guild is None:
+        print(f"Membership departure in unknown guild {payload.guild_id}: {payload.user.id}")
+        return
+    user = payload.user
+    embed = discord.Embed(
+        title="Member Departed",
+        description=(f"**Account:** {user}\n**Discord ID:** `{user.id}`\n"
+                     "Departure may mean a leave, kick, or ban."),
+        color=discord.Color.orange(),
+        timestamp=discord.utils.utcnow(),
+    )
+    await send_member_log(guild, embed)
+
+
+@bot.event
+async def on_member_update(before, after):
+    if before.pending and not after.pending:
+        embed = discord.Embed(
+            title="Member Passed Screening",
+            description=f"**Account:** {after.mention}\n**Discord ID:** `{after.id}`",
+            color=discord.Color.blue(),
+            timestamp=discord.utils.utcnow(),
+        )
+        await send_member_log(after.guild, embed)
+
+
+@bot.event
+async def on_member_ban(guild, user):
+    embed = discord.Embed(
+        title="Member Banned",
+        description=f"**Account:** {user}\n**Discord ID:** `{user.id}`",
+        color=discord.Color.red(),
+        timestamp=discord.utils.utcnow(),
+    )
+    await send_member_log(guild, embed)
+
 
 #--------------------------------------------------------------------
 # Admin Commands
